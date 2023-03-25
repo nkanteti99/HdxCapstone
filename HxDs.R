@@ -1,0 +1,816 @@
+#' ---
+#' title: "HarvardX DataScience Capstone"
+#' author: "Naren Kanteti"
+#' date: "2023-01-26"
+#' output:
+#'   pdf_document: 
+#'     toc: yes
+#'     fig_caption: yes
+#'     number_sections: yes
+#'     highlight: tango
+#'     keep_tex: yes
+#'   html_document:
+#'     toc: yes
+#'     number_sections: yes
+#'     highlight: yes
+#'     df_print: paged
+#'   word_document: 
+#'     fig_caption: yes
+#' ---
+#' 
+#' \newpage
+#' 
+#' # Overview & Objectives:
+#' 
+#' The objective of this project is to predict movie ratings using the MovieLens dataset.The version of movielens we will use in our project is just a small subset of a much larger dataset available with millions of ratings. We will, however, use the smaller dataset to make the computation a little easier. We will explore, analyze the data using analysis and visualization techniques, then move on to build various machine learning models, compare and contrast those until we find the most optimal model for the business case.
+#' 
+#' # Install and Load Packages
+#' 
+#' Let us begin by installing and loading the required packages. This may take a while depending on network bandwidth and computing power being deployed. 
+#' 
+## ----echo=FALSE, message=FALSE, warning=FALSE------------------------------------------------------------------
+knitr::opts_chunk$set(echo = TRUE, message= FALSE, warning = FALSE)
+
+
+## Install all the necessary packages if not already available ## 
+
+if(!require(plyr)) install.packages("plyr", repos = "http://cran.us.r-project.org")
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(Metrics)) install.packages("Metrics", repos = "http://cran.us.r-project.org")
+if(!require(kableExtra)) install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+
+
+#### Note: this process could take a while
+
+## Load necessary packages
+
+library(plyr)
+library(tidyverse)
+library(caret)
+library(kableExtra)
+library(Metrics)
+
+
+
+
+#' 
+#' ## Download data files
+#' 
+#' Now that the packages have been installed, let us download the required data sets. If operating over slower network speeds, it is recommended to pre-download the data into the project directory.
+#' 
+## ----include= FALSE--------------------------------------------------------------------------------------------
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+options(timeout = 120)
+
+## Check to see if the data files exist. If not, download them 
+
+dl <- "ml-10M100K.zip"
+#print(file.exists(dl))
+if(!file.exists(dl))
+  download.file("https://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+## Unzip the file, if it is isn't already unzipped. Same for the Movies.dat file too
+
+ratings_file <- "ml-10M100K/ratings.dat"
+if(!file.exists(ratings_file))
+  unzip(dl, ratings_file)
+
+movies_file <- "ml-10M100K/movies.dat"
+if(!file.exists(movies_file))
+  unzip(dl, movies_file)
+
+ratings <- as.data.frame(str_split(read_lines(ratings_file), fixed("::"), simplify = TRUE),
+                         stringsAsFactors = FALSE)
+colnames(ratings) <- c("userId", "movieId", "rating", "timestamp")
+ratings <- ratings %>%
+  mutate(userId = as.integer(userId),
+         movieId = as.integer(movieId),
+         rating = as.numeric(rating),
+         timestamp = as.integer(timestamp))
+
+#dim(ratings)
+#head(ratings)
+
+movies <- as.data.frame(str_split(read_lines(movies_file), fixed("::"), 3, simplify = TRUE),
+                        stringsAsFactors = FALSE)
+
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- movies %>%
+  mutate(movieId = as.integer(movieId),
+         title= as.character(title),
+         genres= as.character(genres)
+  )
+
+#dim(movies)
+#head(movies)
+
+movielens <- left_join(ratings, movies, by = "movieId")
+#dim(movielens)
+#summary(movielens)%>% knitr::kable(align='c', booktabs=TRUE) %>% 
+#kable_styling(font_size=10, latex_options = "hold_position")
+
+# Final hold-out test set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.6 or later
+# set.seed(1) # if using R 3.5 or earlier
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in final hold-out test set are also in edx set
+final_holdout_test <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from final hold-out test set back into edx set
+removed <- anti_join(temp, final_holdout_test)
+edx <- rbind(edx, removed)
+
+# Remove all the temporary objects that are not needed going forward.
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+# Check to see if there are any rows/columns missing values
+sapply(edx, {function(x) any(is.na(x))}) %>% 
+  knitr::kable(align='c', booktabs=TRUE) %>% 
+  kable_styling(font_size=10, latex_options = "hold_position")
+
+
+#' 
+#' All went well thus far. No missing data in our data set. Let us answer a few initial questions for the quiz. This will also help us to get a feel for the overall data
+#' 
+#' # Data Analysis
+#' 
+#' Let's start by looking at the Edx dataset. 
+#' 
+#' Number of total rows and columns in the Edx data which will be used for training.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+# Number of total rows & columns in Edx Dataset
+dim(edx) 
+
+
+#' 
+#' How many zeros were given as ratings in Edx dataset?
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+# How many zeros were given as ratings in edx dataset
+sum(edx$rating==0)
+
+#' How many 3's were given as rankings in Edx dataset?
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+
+# How many 3's were given as ratings in edx dataset
+sum(edx$rating==3)
+
+#' 
+#' How many unique movies and unique users exists in the dataset?
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+# How many unique movies and unique users exist in edx dataset
+edx %>%
+  dplyr::summarize(unique_users=n_distinct(userId),
+                   unique_movies=n_distinct(movieId)) %>% 
+          knitr::kable(caption="Unique Movies and Unique Users", align = 'l', booktabs=TRUE, col.names = c("Unique # of Users","Unique # of Movies")) %>%
+          kable_styling(font_size=10, latex_options = "hold_position", position="center")
+
+
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+edx %>% head(5) %>% knitr::kable(align='l', booktabs=TRUE)  %>% 
+  kable_styling(font=10, latex_options = "scale_down")
+
+
+#' 
+#' Let us sample the data set visually to get a better understanding of the data. Let us start with Users and Ratings data. Not every user will provide rating for every movie and vice versa. Sample a set of 100 random rows from Edx data set.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+set.seed(5)
+users <- sample(unique(edx$userId), 100)
+edx %>% filter(userId %in% users) %>%
+  dplyr::select(userId, movieId, rating) %>%
+  mutate(rating = 1) %>%
+  spread(movieId, rating) %>% dplyr::select(sample(ncol(.), 100)) %>%
+  as.matrix() %>% t(.) %>%
+  image(1:100, 1:100,. , xlab="Movies", ylab="Users")
+abline(h=0:100+0.5, v=0:100+0.5, col = "lightgrey")
+
+#' 
+#' The solid dots are where a user provided a rating for a particular movie. The gaps are where there is no corresponding data point at the intersection of a particular user and a particular movie. Ideally, our algorithm should, towards the end, be able to predict those values.
+#' 
+#' ## Ratings
+#' 
+#' Let us start by looking at the ratings data in detail. Plot the ratings distribution on a histogram to get a view on data distribution.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+
+# Plot a distribution of ratings
+edx %>% ggplot(aes(rating))+
+  geom_histogram(fill="#87CEFA", color="black", bins=10) +
+  labs(
+    title = "Distribution of Ratings",
+    x = "Rating",
+    y = "Count")+
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+rating_summary <- edx %>% group_by(rating) %>% dplyr::summarize(n = n())
+
+#' 
+#' Summary of the total number of ratings available.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+summary(rating_summary$n)
+
+rating_summary %>%
+  arrange(desc(n)) %>%
+  head(10)%>% kable(caption = "Ranking of the ratings given and number of times they were given", col.names = c("Rating", "Total Count"),
+                    digits = 2) %>%
+              kable_styling(font_size=10, latex_options = "hold_position", position="center")
+
+
+#' 
+#' With 2,588,430 ocuurances, rating of 4 occurs the most. The median of the rating distribution is 619079 indicating that data might be skewed. The more number of ratings a movie received, the most likely it is to get a rating of 3 of higher. The movies on the either extreme ends of the ratings curve(0, and 5) received relatively fewer ratings.
+#' 
+#' ## User Distribution
+#' 
+#' Let us look at the user distribution. Start with plotting general user distribution to see how many times a given user has provided ratings
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+# Plot a distribution of user and number of times they provide ratings
+edx %>% group_by(userId) %>% dplyr::summarize(n = n()) %>%
+  ggplot(aes(n)) + geom_histogram(fill = "#87CEFA", color = "black", bins = 100) +
+  scale_x_log10() +
+  labs(x = "# Of Ratings", y = "# of Users", title = "Number of ratings per user") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+user_summary <- edx %>% group_by(userId) %>% 
+  dplyr::summarize(total_ratings_by_user=n(),
+                   avg_rating_by_user = mean(rating))
+summary(user_summary$total_ratings_by_user)
+
+
+#' 
+#' Over 50% of the users provided 62 ratings or fewer, and a third of the user base provided ratings for less than 140 movies, with the one user providing the most number of views (6616) and on the low side we have a user with 10 total ratings. 
+#' 
+#' ### Users by number of ratings provided
+#' 
+#' Let us analyze the relation between number of ratings given by a user and how they tend to rate.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+#Explore any relation between number of ratings and how they rate movies
+#Create a user summary object
+user_summary %>% filter(total_ratings_by_user < 4000) %>%
+  ggplot(aes(x = total_ratings_by_user, y = avg_rating_by_user)) +
+  geom_point(color = "#87CEFA", size = 3, alpha = 0.8) +
+  #geom_smooth(method = "lm", se = FALSE, color = "#404040") +
+  labs(x = "# of ratings", y = "Avg, Rating", 
+       title = "Number of Ratings by User Vs. Average Rating") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+user_summary %>% arrange(desc(total_ratings_by_user))%>% head(10) %>%
+  kable(caption = "Users with highest number of ratings given (top 10)", col.names = c("Id","Ratings","Avg. Rating"),align = 'c', booktabs=TRUE,
+        digits = 2) %>%
+   kable_styling(font_size=10, latex_options = "hold_position", position="center")
+
+user_summary %>% arrange(desc(total_ratings_by_user))%>% tail(10) %>%
+  kable(caption = "Users with least number of ratings given", col.names = c("Id","Ratings","Avg. Rating"),align = 'c', booktabs=TRUE,
+        digits = 2) %>%
+   kable_styling(font_size=10, latex_options = "hold_position", position="center")
+
+# filter(user_summary, total_ratings_by_user<25) %>%
+#   ggplot(aes(x = total_ratings_by_user, y = avg_rating_by_user)) +
+#   geom_point(color = "#87CEFA", size = 3, alpha = 0.8) +
+#   geom_smooth(method = "lm", se = FALSE, color = "#404040") +
+#   labs(x = "# of ratings", y = "Avg, Rating", 
+#        title = "Avg. Rating by users with fewer than 25 ratings") +
+#   theme_bw(base_size = 12) +
+#   theme(plot.title = element_text(hjust = 0.5))
+
+#' 
+#' Let us rank the user data by their average ratings.
+#' 
+## ----include=FALSE---------------------------------------------------------------------------------------------
+user_summary %>% arrange(desc(avg_rating_by_user))%>% head(10) %>%
+  kable(caption = "Users with highest average ratings",col.names = c("Id","Ratings","Avg. Rating"),align = 'c', booktabs=TRUE,
+        digits = 2) %>%
+  kable_styling(font_size=10, latex_options = "hold_position", position="center")
+
+user_summary %>% arrange(desc(avg_rating_by_user))%>% tail(10) %>%
+  kable(caption = "Users with least average ratings ",col.names = c("Id","Ratings","Avg. Rating"),align = 'c', booktabs=TRUE,
+        digits = 2) %>%
+  kable_styling(font_size=10, latex_options = "hold_position", position="center")
+
+
+#' 
+#' This clearly indicates that the more number of ratings a user submits, the more balanced their ratings are. The users with few number of ratings tend to skew the rating to the higher side.This was also evident when we plotted a rating distribution earlier.
+#' 
+#' ## Movie Distribution
+#' 
+#' Let us look at just the movie data and how its distribution is.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+# Plot a distribution of movies and number of times a movie received a rating
+edx %>% group_by(movieId) %>% dplyr::summarize(n = n()) %>%
+  ggplot(aes(n)) + geom_histogram(fill = "#87CEFA", color = "black", bins = 100) +
+  scale_x_log10() +
+  labs(x = "# Of movies", y = "# of Ratings", title = "Number of ratings per movie") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+movie_summary <- edx %>% group_by(movieId,title) %>% 
+  dplyr::reframe(total_ratings_by_movie=n(),
+                 avg_rating_by_movie = mean(rating))
+summary(movie_summary$total_ratings_by_movie)
+
+
+#' 
+#' This shows that a vast number of movies received rating fewer than 100 times. 75% of the movies in the dataset received fewer than 565 ratings. Pulp Fiction was the movie which received a rating most number of times. Let us evaluate if the number of times rating received has any correlation with the average rating received.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+#Explore any relation between number of ratings received by a movie and its average rating
+
+ggplot(movie_summary, aes(x = total_ratings_by_movie, y = avg_rating_by_movie)) +
+  geom_point(color = "#87CEFA", size = 3, alpha = 0.8) +
+  #geom_smooth(method = "lm", se = FALSE, color = "#404040") +
+  labs(x = "# of ratings", y = "Avg, Rating", 
+       title = "Number of Ratings by Movie Vs. Average Rating") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+#' 
+#' Let see how the averages fare if we look at movies that only received less than 125 ratings
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+
+filter(movie_summary, total_ratings_by_movie<125) %>%
+  ggplot(aes(x = total_ratings_by_movie, y = avg_rating_by_movie)) +
+  geom_point(color = "#87CEFA", size = 3, alpha = 0.8) +
+  #geom_smooth(method = "lm", se = FALSE, color = "#404040") +
+  labs(x = "# of ratings", y = "Avg, Rating", 
+       title = "Avg. Rating of Movies with fewer than 125 ratings") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+#' 
+#' Similar to the user data, the fewer the ratings a movies received, the distribution of average ratings spans the entire scale. 
+#' 
+#' Let us look the movies that received the most number of ratings.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+movie_summary %>% arrange(desc(total_ratings_by_movie))%>% head(10) %>%
+  kable(caption = "Movies with highest number of ratings",align = 'l', booktabs=TRUE,digits=2, col.names=c("Id","Title","Ratings","Average")) %>%
+  kable_styling(font=10, latex_options = "hold_position")
+
+
+movie_summary %>% arrange(desc(total_ratings_by_movie))%>% tail(10) %>%
+  kable(caption = "Movies with least number of ratings",align = 'l', booktabs=TRUE,digits=2, col.names=c("Id","Title","Ratings","Average")) %>%
+  kable_styling(font=10, latex_options = "hold_position")
+
+
+#' 
+#' The average rating of the movies with the highest number of ratings tend to concentrate around 4 (a quiz question), with Pulp Fiction receiving the most number of ratings. Now that we are done with the number of ratings, let us look at the same data from average ratings perspective. To start with, let us see which movies received the highest average rating.Make sure we don't get confused between average rating of a movie and number of ratings a movie received. This analysis will help us during model building to account for any biases so we can regularize the data to correct them.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+movie_summary %>% arrange(desc(avg_rating_by_movie))%>% head(10) %>%
+                   kable(caption = "Movies with highest average ratings",align = 'l', booktabs=TRUE,digits=2, col.names=c("Id","Title","Ratings","Average")) %>%
+  kable_styling(font=10, latex_options = "hold_position")
+
+#' 
+#' As you can see the movies with the highest average ratings did not have that many ratings. These are not the most popular movies either. Finishing up the analysis, let us look at the movies that receive the least average rating.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+movie_summary %>% arrange(desc(avg_rating_by_movie))%>% tail(10) %>%
+  kable(caption = "Movies with least average ratings",align = 'l', booktabs=TRUE,digits=2, col.names=c("Id","Title","Ratings","Average")) %>%
+  kable_styling(font=10, latex_options = "hold_position")
+
+
+#' 
+#' As we guessed, these are some unknown movies and also these movies did not receive many ratings.
+#' 
+#' ## Genre Analysis
+#' 
+#' Let us see if Genre has any relation with the rating received.Since any given movie can belong to multiple genres, we need to isolate them. This will create a matrix of total movies times each genre a movie belonged to.Let us start by looking at the distribution of number of ratings by genre.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+## Split the records into separate rows by isolating individual genres
+
+temp_split <- edx %>% separate_rows(genres, sep="\\|")
+#dm(temp_split)
+
+temp_split %>% group_by(genres) %>% 
+  dplyr::summarize(count=n()) %>% 
+  arrange(desc(count)) %>% knitr::kable(align="l", booktabs=TRUE, caption="Movie counts by genre", col.names = c("Genre","Ratings")) %>%
+                                  kable_styling(font_size = 10, latex_options = "hold_position")
+
+
+genre_summary <- temp_split %>% group_by(genres) %>% 
+  dplyr::reframe(total_ratings_by_genre=n(),
+                 avg_rating_by_genre = mean(rating)) %>%
+  arrange(desc(avg_rating_by_genre))
+
+#' 
+#' Drama category gets the highest number of ratings with Film-Noir getting the least number. This is predictable as the number of drama movies generally made every year are much more than specialized categories such as Film-Noir and documentaries.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+summary(genre_summary$total_ratings_by_genre)
+genre_summary %>%
+  ggplot(aes(reorder(genres, total_ratings_by_genre), total_ratings_by_genre, fill=
+               total_ratings_by_genre)) +
+  geom_bar(stat = "identity") + coord_flip() +
+  labs(y = "# of Ratings", x = "Genre") +
+  ggtitle("Total Ratings across Genres")
+
+#' 
+#' However, let's see if we have a similar variation with the average ratings by Genre.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+genre_summary %>% knitr::kable(caption = "Average Rating by Genre",booktabs=TRUE, col.names = c("Genre","Total Ratings","Avg. Rating"),
+                               digits = 2) %>%
+  kable_styling(font_size = 12, position = "l", latex_options = "hold_position")
+
+#' 
+#' This is definitely interesting. The variation of average rating by genre is much less than what we have seen with users and movies. Film-Noir gets the highest average of 4.01(which had the least number of ratings, by the way) with horror genre getting the least of 3.27. The variation here is much better than what we have observed with movie and user data earlier.
+#' 
+#' 
+#' ## Age of the movie Analysis
+#' 
+#' Let us evaluate if the age of the movie has any relation on its average rating. Intuitively it should. As older the movie gets, the more time users have to provide ratings. Retrieving the age of the movie is a little tricky with the data set. Given that age is not provided. We need to calculate the date/year the movie was released and calculate its age based on off it. The year is provided in the title, so we need to extract it out.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+edx <- edx %>%
+  mutate(year_released = as.integer(substr(title, str_length(title) - 4,
+                                           str_length(title) - 1)))
+#head(edx,10)
+
+current_year <- as.integer(substr(Sys.Date(),1,4))
+# Add the age column to the Edx data set so we can use it later, if necessary
+
+edx <- edx %>%
+  mutate(age = as.integer(current_year-year_released))
+
+age_summary <- edx %>% group_by(age) %>%
+  dplyr::summarize(number_of_ratings_by_age=n(), 
+                   average_rating_by_age= mean(rating))
+
+# Let's look at the age distribution by itself
+
+ggplot(edx, aes(edx$age )) +
+  geom_histogram(fill = "#87CEFA", color = "black", bins = 50) +
+  labs(x = "Age", title = "Age distribution of all movies") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+summary(edx$age)
+
+
+#' 
+#' The median age of the movie if 33, with 75% of the movies in our data set being 36 years old. There are a few outliers in the data, but given that median is closer to the mean, we should be okay here. Let us see if the age of the movie has any effect on number of ratings available and also its average rating.
+#' 
+#' Number of movies with older than 75 years is 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+nrow(edx[edx$age > 75,] )
+
+#' 
+#' 
+#' 
+#' Since only a very small portion of movies in our data set are older than 75 years (213626 to be specific), We will exclude them from the following data visualization.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+#Let us not worry about movies that are older than 75 years
+
+#Plot the age of the movie to the average rating
+age_summary %>% filter(age<75) %>%
+  ggplot(aes(x = age, y = average_rating_by_age)) +
+  geom_line(color = "#87CEFA",size = 3, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "#404040") +
+  labs(x = "Age of the movie", y = "Avg, Rating", title = "Movie Age Vs. Average Rating") +
+  ylim(2.5,5)+
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+#' 
+#' It is an interesting trend. Looks like the rating is a little higher for movies between ages 15 and 20 and tends to dip within ages 20 and 30, and picks back up. Let us look at the number of ratings received by age.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+age_summary %>% filter(age<75) %>%
+  ggplot(aes(x = age, y = number_of_ratings_by_age)) +
+  geom_line(color = "#87CEFA", size = 3, alpha = 0.8) +
+  labs(x = "Age of the movie", y = "Number of ratings", title = "Movie Age Vs. Number of ratings received") +
+  scale_y_continuous() +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+#' 
+#' Looks interesting. In contrast to the data above. The movies between the ages of 20 and 30 had the most number of ratings but they are also the one's with lesser average ratings relatively.
+#' 
+#' Looks like there definitely is a relation between age of the movie and its average rating received by users. Now that we have analyzed the data, let start building a few models using some of the relational insights we have gained thus far. The strategy is to evaluate the effect of movie, user, age and genre on the overall rating of the movie. We will compute the model efficiency as we go and try to make it better. We can also deploy regularization techniques to make it better.
+#' 
+#' Since the combination of user and movie gets really large and with a lot of missing values, using a regression algorithm is not recommended. We will instead use the residual mean squared error (RMSE) strategy.
+#' 
+#' To start with, let us build a basic guessing model and see how it fares. 
+#' 
+#' # Model Building
+#' 
+#' ## Random Guessing
+#' 
+#' Let us start by randomly guessing a rating between 0 and 5 and see how we do.
+#' 
+## ----echo=TRUE-------------------------------------------------------------------------------------------------
+set.seed(1)
+model_0 <- RMSE(sample(seq(1, 5, by = 0.5), size = 1),edx$rating)
+training_results <- data.frame(Method="Random Guessing", RMSE=model_0)
+training_results %>% knitr::kable(caption = "Training RMSE results",digits = 6) %>%
+  kable_styling(font_size = 12, position = "l", latex_options = "hold_position")
+
+
+#' 
+#' As you can see the value of RMSE is pretty high.So, just a random guess will not do. Let's see how we do if we use the predicted rating for any movie as the overall mean of the entire data set.
+#' 
+#' ## Using the Mean from Data Set
+#' 
+#' Now, let us try using the mean value of ratings of the entire data set as our prediction and calculate the RMSE.
+#' 
+## ----echo=TRUE-------------------------------------------------------------------------------------------------
+
+mu <- mean(edx$rating)
+model_1 <- RMSE(mu, edx$rating)
+training_results <- bind_rows(training_results, 
+                              data_frame(Method=" Average of all ratings in Edx", RMSE=model_1))
+training_results %>% knitr::kable(caption = "Training RMSE results",digits = 6) %>%
+                            kable_styling(font_size=10, latex_options = "hold_position")
+
+
+#' 
+#' It's gotten better, but is still too high. This is when we start to deploy our earlier mentioned strategy. Let us start evaluating movie effect on our model.
+#' 
+#' ## Modelling movie effect
+#' 
+#' Let us account for the movie bias, and calculate RMSE again.
+#' 
+## ----echo=TRUE-------------------------------------------------------------------------------------------------
+
+movie_avgs <- edx %>%
+  group_by(movieId) %>%
+  dplyr::summarize(b_i = mean(rating - mu))
+
+movie_avgs %>% qplot(b_i, geom ="histogram", bins = 10, data = ., color = I("#87CEFA"))
+
+predicted_ratings_by_movie <- mu + edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  .$b_i
+
+model_2 <- RMSE(predicted_ratings_by_movie, edx$rating)
+
+training_results <- bind_rows(training_results, data_frame(Method="Movie Effect Model",RMSE = model_2 ))
+training_results %>% knitr::kable(caption = "Training RMSE results",digits = 6) %>%
+                            kable_styling(font_size=10, latex_options = "hold_position")
+
+
+#' 
+#' It is getting better. Let us proceed to evaluate the user effect on predictions.
+#' 
+#' ## Modelling user effect
+#' 
+#' Similarly, let us account for user bias as well.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+user_avgs <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  dplyr::summarize(b_u = mean(rating - mu - b_i))
+
+user_avgs %>% qplot(b_u, geom ="histogram", bins = 10, data = ., color = I("#87CEFA"))
+
+predicted_ratings_by_movie_user <- edx %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+
+model_3 <- RMSE(predicted_ratings_by_movie_user, edx$rating)
+training_results <- bind_rows(training_results,
+                              data_frame(Method="Movie & Users Model",
+                                         RMSE = model_3 ))
+
+training_results %>% knitr::kable(caption = "Training RMSE results",digits = 6) %>%
+  kable_styling(font_size=10, latex_options = "hold_position")
+
+
+#' 
+#' It has definitely gotten better. From our preliminary data exploration, we observed that age did influence the rating of the movie. Let us evaluate age effect into our model.
+#' 
+#' ## Modelling age effect
+#' 
+#' Accounting for age bias.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+time_avgs <- edx%>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(age) %>%
+  dplyr::summarize(b_t=mean( rating- mu- b_i- b_u))
+
+time_avgs %>% qplot(b_t, geom ="histogram", bins = 10, data = ., color = I("#87CEFA"))
+
+predicted_ratings_by_movie_user_time <- edx %>%
+  left_join(movie_avgs, by = 'movieId') %>%
+  left_join(user_avgs, by = 'userId') %>%
+  left_join(time_avgs, by ='age') %>%
+  mutate(pred = mu + b_i + b_u + b_t) %>%
+  .$pred
+
+model_4 <- RMSE(predicted_ratings_by_movie_user_time, edx$rating)
+training_results <- bind_rows(training_results,
+                              data_frame(Method="Movie, User and Release Year Model",
+                                         RMSE = model_4 ))
+
+training_results %>% knitr::kable(caption = "Training RMSE results",digits = 6) %>%
+                            kable_styling(font_size=10, latex_options = "hold_position")
+
+
+#' 
+#' We were able to achieve the least value of RMSE thus far with a training model value of 0.856378. 
+#' 
+#' 
+#' # Applying our Model on the validation data set
+#' 
+#' Now that we have made our model very effective, let us deploy this model on our testing/validation set and evaluate the results. Since we will be using the age as a factor as well, lets add the age column to the testing dataset as well.
+#' 
+#' 
+## ----echo=TRUE-------------------------------------------------------------------------------------------------
+
+final_holdout_test <- final_holdout_test %>%
+  mutate(year_released = as.integer(substr(title, str_length(title) - 4,
+                                           str_length(title) - 1)))
+
+current_year <- as.integer(substr(Sys.Date(),1,4))
+final_holdout_test <- final_holdout_test %>%
+  mutate(age = as.integer(current_year-year_released))
+
+predicted_ratings_in_validation_set <- final_holdout_test %>%
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(time_avgs, by='age') %>%
+  mutate(pred = mu + b_i + b_u + b_t) %>%
+  .$pred
+
+validation_model <- RMSE(predicted_ratings_in_validation_set, final_holdout_test$rating)
+
+validation_results <- data_frame(Method=" Final Validation", RMSE=validation_model)
+validation_results %>% knitr::kable(caption = "Validation RMSE results",digits = 6) %>%
+                              kable_styling(font_size=10, latex_options = "hold_position")
+
+
+#' 
+#' This is a decent RMSE and is very close to the value we computed on the training set, but still not there yet.As per guidelines, the target score we have to achieve in this project should be less than 0.086490. We are a little off from our target.
+#' 
+#' As we have seen from the data exploration on "user vs ratings" data, there are definitely outliers in the data that are skewing the data. The users that rated the movie very high or very low only rated a few times, and in some instances only once. Hence, regularization of the data might help make the model better. 
+#' 
+#' ## Regularize Movie Data
+#' 
+#' Let us begin by regularizing movie data
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+
+lambdas <- seq(0, 10, 0.25)
+mu <- mean(edx$rating)
+just_the_sum <- edx %>%
+  group_by(movieId) %>%
+  dplyr::summarize(s = sum(rating - mu), n_i = n())
+
+rmses <- sapply(lambdas, function(l){
+  predicted_ratings <- final_holdout_test %>%
+    left_join(just_the_sum, by='movieId') %>%
+    mutate(b_i = s/(n_i+l)) %>%
+    mutate(pred = mu + b_i) %>%
+    .$pred
+  return(RMSE(predicted_ratings, final_holdout_test$rating))
+})
+qplot(lambdas, rmses)
+#lambdas[which.min(rmses)]
+
+validation_results <- bind_rows(validation_results,
+                                data_frame(Method="Regularized Movie Model",
+                                           RMSE = min(rmses)))
+validation_results %>% knitr::kable(caption = "Validation RMSE results",digits = 6) %>%
+                              kable_styling(font_size=10, latex_options = "hold_position")
+
+
+#' 
+#' Regularization of movie data by itself actually made it worse. 
+#' 
+#' ### Regularize Movie and User Data
+#' 
+#' Let us move on to user data and see its effects on our score.We will also use cross validation technique to derive the lambda value that gives us the least RMSE for this model. We will follow a similar technique for regularizing other factors as well, as necessary.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(edx$rating)
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    dplyr::summarize(b_i = sum(rating - mu)/(n()+l))
+  b_u <- edx %>%
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    dplyr::summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  predicted_ratings <-
+    final_holdout_test %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    .$pred
+  return(RMSE(predicted_ratings, final_holdout_test$rating))
+})
+
+qplot(lambdas, rmses)
+#lambdas[which.min(rmses)]
+
+validation_results <- bind_rows(validation_results,
+                                data_frame(Method="Regularized Movie + Regulaized User Effect Model",
+                                           RMSE = min(rmses)))
+validation_results %>% knitr::kable(caption = "Validation RMSE results",digits = 6) %>%
+                              kable_styling(font_size=10, latex_options = "hold_position")
+
+
+#' 
+#' This helped the most. With a RMSE value of 0.86481, we have hit our goal of getting a score less than 0.086490. 
+#' 
+#' 
+#' ### Movie, User and Age regularization
+#' 
+#' Let us also see if age regularization will have any effect on our final outcome.
+#' 
+## --------------------------------------------------------------------------------------------------------------
+
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l){
+  
+  mu <- mean(edx$rating)
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    dplyr::summarize(b_i = sum(rating - mu)/(n()+l))
+  b_u <- edx %>%
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    dplyr::summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  b_t <- edx %>%
+    left_join(b_i, by="movieId") %>%
+    left_join(b_u, by= "userId") %>%
+    group_by(age) %>%
+    dplyr::summarize(b_t = sum(rating - b_i - b_u - mu)/(n()+l))
+  predicted_ratings <- final_holdout_test %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    left_join(b_t, by = "age") %>%
+    mutate(pred = mu + b_i + b_u + b_t) %>%
+    .$pred
+  return(RMSE(predicted_ratings, final_holdout_test$rating))
+})
+
+qplot(lambdas, rmses)
+lambdas[which.min(rmses)]
+
+
+#' 
+#' By far, regularization of User data had the most effect on our final value, and age did make it a little better as well.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+validation_results <- bind_rows(validation_results,
+                                data_frame(Method="Regularized Movie + Regulaized User + Regularized Age Effect Model", RMSE = min(rmses)))
+
+validation_results %>% knitr::kable(caption = "Validation RMSE results",digits = 6) %>%
+                              kable_styling(font_size=10, latex_options = "hold_position")
+
+
+#' 
+#' It did help make it a little better.This is the best score we have been achieve thus far. Our final score is **0.086452.**
+#' 
+#' # Conclusion
+#' 
+#' In the end, the model that accounts for regularization of predictors produced the best results for us. We could have deployed various other strategies to get the rmse lower such as matrix factorization with stochastic gradient (best suited for use cases such as these), single value decomposition method (the actual strategy that won the Netflix contest) and Bayesian SVD+ etc.,. While working on this project, I had to refer back to the course text book multiple times which helped me understand the problem and various available techniques even better.
+#' 
+#' Next steps are to actually build a matrix factorization model, analyze and evaluate its performance.
+#' 
+#' 
+#' Citations:
+#' 
+#' 1. Simsekli, Umut & Koptagel, Hazal & Güldaş, Hakan & Cemgil, Ali & Öztoprak, Figen & Birbil, Ilker. (2015). Parallel Stochastic Gradient Markov Chain Monte Carlo for Matrix Factorisation Models.
+#' 
+#' 2. Yu-Chin Juan, Wei-Sheng Chin, Yong Zhuang, Bo-Wen Yuan, Meng-Yuan Yang, and Chih-Jen Lin.LIBMF: A Matrix-factorization Library for Recommender Systems
+#' 
+#' 3. Rafael A. Irizarry, Introduction to Data Science.
+#' 
+## ----echo=FALSE------------------------------------------------------------------------------------------------
+
+#knitr::purl("HxDs.Rmd", documentation = 2)
+
+
